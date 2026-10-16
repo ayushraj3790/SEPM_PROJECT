@@ -19,6 +19,18 @@ const isMemberOf = (group, userId) => group.members.some((m) => sameId(m.user_id
 const isOwnerOf = (group, userId) => sameId(group.createdBy, userId);
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+const MONTHS = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+
+// Parse a date string; returns Date, null (not provided) or throws 400 if invalid / in the future.
+const parseDateParam = (value, label, { allowFuture = true } = {}) => {
+  if (value === undefined || value === null || String(value).trim() === "") return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) throw new ApiError(400, `Invalid ${label}`);
+  if (!allowFuture && d.getTime() > Date.now() + 24 * 60 * 60 * 1000)
+    throw new ApiError(400, `${label} cannot be in the future`);
+  return d;
+};
+
 const loadGroup = async (groupId) => {
   if (!mongoose.isValidObjectId(groupId)) throw new ApiError(400, "Invalid group id");
   const group = await Privategroup.findById(groupId);
@@ -137,9 +149,11 @@ export const leavePrivateGroup = asyncHandler(async (req, res) => {
 
 // ---------- stories ----------
 export const addGroupStory = asyncHandler(async (req, res) => {
-  const { contentType, text } = req.body;
+  const { contentType, text, title, memoryDate } = req.body;
   const file = req.file;
   if (!contentType) throw new ApiError(400, "Story contentType is required");
+  const parsedMemoryDate = parseDateParam(memoryDate, "Memory date", { allowFuture: false }) || new Date();
+  const cleanTitle = title?.trim().slice(0, 120) || undefined;
 
   const group = await loadGroup(req.params.groupId);
   if (!isMemberOf(group, req.user._id)) throw new ApiError(403, "You are not a member of this group");
@@ -147,13 +161,14 @@ export const addGroupStory = asyncHandler(async (req, res) => {
   let story;
   if (contentType === "text") {
     if (!text?.trim()) throw new ApiError(400, "Text content is required for text story");
-    story = { contentType, text, createdBy: req.user._id };
+    story = { contentType, title: cleanTitle, memoryDate: parsedMemoryDate, text, createdBy: req.user._id };
   } else {
     if (!file) throw new ApiError(400, `${contentType} file is required`);
     const resourceType = ["image", "video", "audio"].includes(contentType) ? contentType : "auto";
     const uploaded = await uploadOnCloudinary(file.path, resourceType);
     story = {
-      contentType, url: uploaded.secure_url, mimeType: file.mimetype, size: file.size,
+      contentType, title: cleanTitle, memoryDate: parsedMemoryDate,
+      url: uploaded.secure_url, mimeType: file.mimetype, size: file.size,
       text: text || "", createdBy: req.user._id,
     };
   }
@@ -163,14 +178,53 @@ export const addGroupStory = asyncHandler(async (req, res) => {
   return res.status(201).json(new ApiResponse(201, group.story.at(-1), "Story added successfully"));
 });
 
+// GET /private-group/:groupId/stories
+// Query: page, limit, q (search), sort = memory | created (default memory), order = asc | desc (default desc),
+//        from, to (filter by the chosen date field, inclusive, YYYY-MM-DD)
 export const getGroupStories = asyncHandler(async (req, res) => {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 50);
+  const sortBy = req.query.sort === "created" ? "created" : "memory";
+  const dir = req.query.order === "asc" ? 1 : -1;
+  const q = (req.query.q || "").toString().trim().toLowerCase();
+  const from = parseDateParam(req.query.from, "from date");
+  const to = parseDateParam(req.query.to, "to date");
+  if (to) to.setUTCHours(23, 59, 59, 999); // make "to" inclusive of the whole day
 
   const group = await loadGroup(req.params.groupId);
   if (!isMemberOf(group, req.user._id)) throw new ApiError(403, "You are not a member of this group");
 
-  const all = group.story.map((s) => s.toObject()).sort((a, b) => b.createdAt - a.createdAt);
+  // Old stories have no memoryDate -> fall back to the day they were posted.
+  let all = group.story.map((s) => {
+    const o = s.toObject();
+    o.memoryDate = o.memoryDate || o.createdAt;
+    return o;
+  });
+
+  const dateOf = (s) => new Date(sortBy === "memory" ? s.memoryDate : s.createdAt).getTime();
+  if (from) all = all.filter((s) => dateOf(s) >= from.getTime());
+  if (to) all = all.filter((s) => dateOf(s) <= to.getTime());
+
+  if (q) {
+    const userMap = await userSummaries([...new Set(all.map((s) => String(s.createdBy)))]);
+    const words = q.split(/\s+/).filter(Boolean);
+    all = all.filter((s) => {
+      const u = userMap[String(s.createdBy)] || {};
+      const md = new Date(s.memoryDate);
+      const haystack = [
+        s.title, s.text, u.fullname, u.username,
+        MONTHS[md.getUTCMonth()], String(md.getUTCFullYear()), md.toISOString().slice(0, 10),
+      ].filter(Boolean).join(" ").toLowerCase();
+      return words.every((w) => haystack.includes(w)); // every word must match somewhere
+    });
+  }
+
+  all.sort((a, b) => {
+    const diff = dateOf(a) - dateOf(b);
+    if (diff !== 0) return diff * dir;
+    return (new Date(a.createdAt) - new Date(b.createdAt)) * dir; // stable tie-break
+  });
+
   const pageItems = all.slice((page - 1) * limit, page * limit);
   const userMap = await userSummaries([...new Set(pageItems.map((s) => String(s.createdBy)))]);
 

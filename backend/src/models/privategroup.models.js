@@ -3,6 +3,10 @@ import mongoose, { Schema } from "mongoose";
 const storySchema = new Schema(
   {
     contentType: { type: String, enum: ["text", "image", "video", "audio", "file"], required: true },
+    title: { type: String, trim: true, maxlength: 120 },
+    // When the memory actually happened (user-chosen). createdAt (timestamps) = when it was posted.
+    // No schema default on purpose: older stories have none and fall back to createdAt when read.
+    memoryDate: { type: Date },
     text: String,
     url: String,
     mimeType: String,

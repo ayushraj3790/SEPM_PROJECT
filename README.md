@@ -25,12 +25,6 @@ npm install && npm run dev           # http://localhost:5173
 | GET | /private-group/my, /:groupId | |
 | PATCH/DELETE | /private-group/:groupId | owner only |
 | DELETE | /private-group/:groupId/members, /members/me | remove member (owner) / leave |
-| POST/GET | /private-group/:groupId/stories | multipart `file` for media |
+| POST | /private-group/:groupId/stories | multipart: `contentType`, `text`, optional `title`, `memoryDate` (YYYY-MM-DD, not in the future), `file` |
+| GET | /private-group/:groupId/stories | query: `page`, `limit`, `q` (search title/text/person/month/year), `sort=memory\|created`, `order=asc\|desc`, `from`, `to` |
 | DELETE | /private-group/:groupId/stories/:storyId | story author or group owner |
-
-## What changed vs Famly
-- PostgreSQL removed: users now live in MongoDB; `user_id` is the Mongo ObjectId (still exposed as `user_id` to the UI).
-- Dropped: families, OTP signup, Google login, notifications, sockets, video calls.
-- Fixes: story subdocs now have `createdAt` (sorting was a no-op), group-search regex is escaped,
-  uploads go to an unserved `uploads/` temp dir (they were served from `public/`), Cloudinary cleanup no longer throws,
-  token refresh now returns the user, group details/stories require membership.

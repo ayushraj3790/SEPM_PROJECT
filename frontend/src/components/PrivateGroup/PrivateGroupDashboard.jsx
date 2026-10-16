@@ -114,35 +114,80 @@ export default function PrivateGroups() {
     const [selectedGroupInviteCode, setSelectedGroupInviteCode] = useState(null);
     const [copiedCode, setCopiedCode] = useState(null);
 
+    // search / sort / filter for the story feed
+    const [searchInput, setSearchInput] = useState('');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [sortBy, setSortBy] = useState('memory'); // 'memory' | 'created'
+    const [order, setOrder] = useState('desc');     // 'desc' = newest first
+    const [fromDate, setFromDate] = useState('');
+    const [toDate, setToDate] = useState('');
+    const [pagination, setPagination] = useState({ total: 0, page: 1, totalPages: 1 });
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+
     const clearAllData = useCallback(() => {
         setGroups([]); setSelectedGroup(null); setStories([]); setMembers([]);
         setSelectedGroupOwnerId(null); setSelectedGroupInviteCode(null);
         setExpandedDescriptions({}); setError(null); setIsLoadingGroups(true); setIsFetchingDetails(false);
+        setSearchInput(''); setSearchQuery(''); setFromDate(''); setToDate('');
+        setPagination({ total: 0, page: 1, totalPages: 1 });
     }, []);
 
+    // Loads one page of stories using the current search / sort / date filters.
+    const fetchStories = useCallback(async (groupId, page = 1, append = false) => {
+        if (!groupId) return;
+        append ? setIsLoadingMore(true) : setIsFetchingDetails(true);
+        try {
+            const res = await axios.get(`/private-group/${groupId}/stories`, {
+                params: {
+                    page, limit: 10, sort: sortBy, order,
+                    ...(searchQuery && { q: searchQuery }),
+                    ...(fromDate && { from: fromDate }),
+                    ...(toDate && { to: toDate }),
+                },
+            });
+            const data = res.data?.data;
+            setStories((prev) => (append ? [...prev, ...(data?.stories || [])] : data?.stories || []));
+            setPagination(data?.pagination || { total: 0, page: 1, totalPages: 1 });
+            setError(null);
+        } catch {
+            setError('Failed to load stories.');
+        } finally {
+            append ? setIsLoadingMore(false) : setIsFetchingDetails(false);
+        }
+    }, [sortBy, order, searchQuery, fromDate, toDate]);
+
+    // Group info (members, invite code). Stories are loaded by the effect below.
     const fetchGroupDetails = useCallback(async (groupId) => {
         if (!groupId) return;
-        setSelectedGroup(groupId); setIsFetchingDetails(true); setStories([]); setMembers([]);
+        setSelectedGroup(groupId); setMembers([]);
         setError(null); setSelectedGroupOwnerId(null); setSelectedGroupInviteCode(null);
         try {
-            const [storyRes, detailRes] = await Promise.all([
-                axios.get(`/private-group/${groupId}/stories`),
-                axios.get(`/private-group/${groupId}`),
-            ]);
-            setStories(storyRes.data?.data?.stories || []);
+            const detailRes = await axios.get(`/private-group/${groupId}`);
             setMembers(detailRes.data?.data?.members || []);
             setSelectedGroupOwnerId(detailRes.data?.data?.createdBy);
             setSelectedGroupInviteCode(detailRes.data?.data?.inviteCode);
-        } catch (err) {
+        } catch {
             setError(`Failed to load data for group.`);
-        } finally {
-            setIsFetchingDetails(false);
         }
     }, []);
 
     const refreshStoryFeed = useCallback(() => {
-        if (selectedGroup) fetchGroupDetails(selectedGroup);
-    }, [selectedGroup, fetchGroupDetails]);
+        if (selectedGroup) fetchStories(selectedGroup, 1, false);
+    }, [selectedGroup, fetchStories]);
+
+    // Debounce the search box so we don't hit the API on every keystroke.
+    useEffect(() => {
+        const t = setTimeout(() => setSearchQuery(searchInput.trim()), 350);
+        return () => clearTimeout(t);
+    }, [searchInput]);
+
+    // (Re)load stories whenever the group or any filter changes.
+    useEffect(() => {
+        if (selectedGroup) { setStories([]); fetchStories(selectedGroup, 1, false); }
+    }, [selectedGroup, fetchStories]);
+
+    const hasActiveFilters = Boolean(searchQuery || fromDate || toDate);
+    const clearFilters = () => { setSearchInput(''); setSearchQuery(''); setFromDate(''); setToDate(''); };
 
     const reFetchGroupsAndSelectFirst = useCallback(async () => {
         clearAllData();
@@ -200,7 +245,7 @@ export default function PrivateGroups() {
     const handleDeleteStory = async (storyId) => {
         if (!window.confirm("Delete this story? This cannot be undone.")) return;
         if (!selectedGroup) return;
-        try { await axios.delete(`/private-group/${selectedGroup}/stories/${storyId}`); setStories(prev => prev.filter(s => s._id !== storyId)); }
+        try { await axios.delete(`/private-group/${selectedGroup}/stories/${storyId}`); setStories(prev => prev.filter(s => s._id !== storyId)); setPagination(p => ({ ...p, total: Math.max(0, p.total - 1) })); }
         catch { alert("Failed to delete story."); }
     };
 
@@ -366,6 +411,65 @@ export default function PrivateGroups() {
                     )}
                 </div>
 
+                {selectedGroup && (
+                    <div className="glass-card-static p-4 mb-6 space-y-3">
+                        <div className="flex gap-3 flex-wrap">
+                            <div className="relative flex-1 min-w-[220px]">
+                                <input
+                                    type="text"
+                                    value={searchInput}
+                                    onChange={(e) => setSearchInput(e.target.value)}
+                                    placeholder="Search title, text, person, month or year…"
+                                    className="input-field text-sm"
+                                    style={{ paddingRight: 36 }}
+                                />
+                                {searchInput && (
+                                    <button
+                                        onClick={() => setSearchInput('')}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 bg-transparent border-0 cursor-pointer text-sm"
+                                        style={{ color: "var(--text-muted)" }}
+                                        aria-label="Clear search"
+                                    >✕</button>
+                                )}
+                            </div>
+                            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="input-field text-sm" style={{ width: "auto" }}>
+                                <option value="memory">Memory date</option>
+                                <option value="created">Date posted</option>
+                            </select>
+                            <button
+                                type="button"
+                                onClick={() => setOrder((o) => (o === 'desc' ? 'asc' : 'desc'))}
+                                className="btn-secondary text-sm px-4"
+                                title="Toggle sort order"
+                            >
+                                {order === 'desc' ? '↓ Newest first' : '↑ Oldest first'}
+                            </button>
+                        </div>
+                        <div className="flex gap-3 flex-wrap items-center">
+                            <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+                                {sortBy === 'memory' ? 'Memory date' : 'Posted'} between
+                            </span>
+                            <input type="date" value={fromDate} max={toDate || undefined} onChange={(e) => setFromDate(e.target.value)} className="input-field text-sm" style={{ width: "auto", colorScheme: "dark" }} />
+                            <span className="text-xs" style={{ color: "var(--text-muted)" }}>and</span>
+                            <input type="date" value={toDate} min={fromDate || undefined} onChange={(e) => setToDate(e.target.value)} className="input-field text-sm" style={{ width: "auto", colorScheme: "dark" }} />
+                            {hasActiveFilters && (
+                                <button onClick={clearFilters} className="text-xs underline bg-transparent border-0 cursor-pointer" style={{ color: "var(--accent-light)" }}>
+                                    Clear filters
+                                </button>
+                            )}
+                            <span className="text-xs ml-auto" style={{ color: "var(--text-muted)" }}>
+                                {pagination.total} {pagination.total === 1 ? 'story' : 'stories'}
+                            </span>
+                        </div>
+                    </div>
+                )}
+
+                {error && selectedGroup && (
+                    <p className="text-sm mb-4 p-3 rounded-xl" style={{ color: "#fca5a5", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)" }}>
+                        {error}
+                    </p>
+                )}
+
                 {isFetchingDetails ? (
                     <div className="text-center p-10 flex items-center justify-center gap-3" style={{ color: "var(--accent-light)" }}>
                         <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -378,7 +482,11 @@ export default function PrivateGroups() {
                     <div className="glass-card-static p-10 text-center mt-10">
                         <div className="text-4xl mb-4">{selectedGroup ? "📸" : "👈"}</div>
                         <p style={{ color: "var(--text-secondary)" }}>
-                            {selectedGroup ? "No stories yet. Share your first memory!" : "Select a circle to view stories."}
+                            {!selectedGroup
+                                ? "Select a circle to view stories."
+                                : hasActiveFilters
+                                    ? "No stories match your search or date filters."
+                                    : "No stories yet. Share your first memory!"}
                         </p>
                     </div>
                 ) : (
@@ -426,6 +534,9 @@ export default function PrivateGroups() {
                                         )}
                                     </div>
                                     <div className="mt-3">
+                                        {story.title && (
+                                            <h3 className="text-lg font-bold mb-2" style={{ color: "var(--text-primary)" }}>{story.title}</h3>
+                                        )}
                                         {story.contentType === "text" && (
                                             <p className="text-base leading-relaxed whitespace-pre-wrap" style={{ color: "var(--text-secondary)" }}>{story.text}</p>
                                         )}
@@ -442,12 +553,26 @@ export default function PrivateGroups() {
                                             </>
                                         )}
                                     </div>
-                                    <p className="text-xs mt-4 text-right" style={{ color: "var(--text-muted)" }}>
-                                        {new Date(story.createdAt).toLocaleString()}
-                                    </p>
+                                    <div className="flex justify-between items-center flex-wrap gap-2 mt-4 text-xs" style={{ color: "var(--text-muted)" }}>
+                                        <span className="px-2.5 py-1 rounded-full font-medium" style={{ background: "rgba(139,92,246,0.15)", color: "var(--accent-light)" }}>
+                                            📅 Memory: {new Date(story.memoryDate || story.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric', timeZone: 'UTC' })}
+                                        </span>
+                                        <span>Posted {new Date(story.createdAt).toLocaleString()}</span>
+                                    </div>
                                 </div>
                             );
                         })}
+                        {pagination.page < pagination.totalPages && (
+                            <div className="text-center pt-2">
+                                <button
+                                    onClick={() => fetchStories(selectedGroup, pagination.page + 1, true)}
+                                    className="btn-secondary text-sm px-6 py-2.5"
+                                    disabled={isLoadingMore}
+                                >
+                                    {isLoadingMore ? 'Loading…' : 'Load more'}
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

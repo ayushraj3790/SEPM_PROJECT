@@ -28,6 +28,9 @@ const TypeButton = ({ type, currentType, onClick, Icon }) => {
 export default function AddStory({ privateGroupId, onClose, onStoryAdded }) {
     const [contentType, setContentType] = useState('text');
     const [text, setText] = useState('');
+    const todayStr = new Date().toLocaleDateString('en-CA'); // local YYYY-MM-DD
+    const [title, setTitle] = useState('');
+    const [memoryDate, setMemoryDate] = useState(todayStr);
     const [file, setFile] = useState(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState(null);
@@ -58,6 +61,8 @@ export default function AddStory({ privateGroupId, onClose, onStoryAdded }) {
         const formData = new FormData();
         formData.append('contentType', contentType);
         formData.append('text', textContent);
+        if (title.trim()) formData.append('title', title.trim());
+        if (memoryDate) formData.append('memoryDate', memoryDate);
         if (file) formData.append('file', file);
 
         try {
@@ -86,6 +91,35 @@ export default function AddStory({ privateGroupId, onClose, onStoryAdded }) {
                         <TypeButton type="text" currentType={contentType} onClick={handleModeChange} Icon={TextIcon} />
                         <TypeButton type="image" currentType={contentType} onClick={handleModeChange} Icon={PhotoIcon} />
                         <TypeButton type="video" currentType={contentType} onClick={handleModeChange} Icon={VideoIcon} />
+                    </div>
+                </div>
+
+                {/* Title + Memory Date */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label className="block text-xs font-semibold mb-2" style={{ color: "var(--text-secondary)" }}>Title (optional)</label>
+                        <input
+                            type="text"
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            maxLength={120}
+                            placeholder="e.g. Grandma's 70th birthday"
+                            className="input-field"
+                            disabled={isSubmitting}
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-xs font-semibold mb-2" style={{ color: "var(--text-secondary)" }}>When did this happen?</label>
+                        <input
+                            type="date"
+                            value={memoryDate}
+                            max={todayStr}
+                            onChange={(e) => setMemoryDate(e.target.value)}
+                            className="input-field"
+                            required
+                            disabled={isSubmitting}
+                            style={{ colorScheme: "dark" }}
+                        />
                     </div>
                 </div>
 
